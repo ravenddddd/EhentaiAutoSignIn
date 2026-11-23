@@ -1,191 +1,41 @@
-name: Build release executables and container image
+name: Build and publish the container image
 
 on:
   push:
+    branches:
+      - main
     tags:
       - 'v*'
+  workflow_dispatch:
 
 permissions:
   contents: read
 
-# Windows 运行器可能使用 CP1252，统一 Python 的默认编码和控制台编码。
 env:
   PYTHONUTF8: '1'
   PYTHONIOENCODING: 'utf-8'
 
 jobs:
-  validate-tag:
-    runs-on: ubuntu-latest
-    outputs:
-      valid: ${{ steps.check.outputs.valid }}
-    steps:
-      - name: Check version tag
-        id: check
-        shell: bash
-        env:
-          TAG: ${{ github.ref_name }}
-        run: |
-          if [[ "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-            echo 'valid=true' >> "$GITHUB_OUTPUT"
-          else
-            echo 'valid=false' >> "$GITHUB_OUTPUT"
-            echo "Skipping non-version tag: $TAG"
-          fi
-
   test:
-    needs: validate-tag
-    if: needs.validate-tag.outputs.valid == 'true'
-    name: Test ${{ matrix.target }}
-    runs-on: ${{ matrix.runner }}
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - target: windows-x64
-            runner: windows-2025
-            python_arch: x64
-          - target: windows-arm64
-            runner: windows-11-arm
-            python_arch: arm64
-          - target: linux-x64
-            runner: ubuntu-22.04
-            python_arch: x64
-          - target: linux-arm64
-            runner: ubuntu-22.04-arm
-            python_arch: arm64
-          - target: macos-x64
-            runner: macos-15-intel
-            python_arch: x64
-          - target: macos-arm64
-            runner: macos-15
-            python_arch: arm64
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-python@v7
         with:
           python-version: '3.12'
-          architecture: ${{ matrix.python_arch }}
-      - name: Verify Python architecture
-        run: python .github/scripts/verify_arch.py ${{ matrix.target }}
       - name: Install project and test dependencies
         run: python -m pip install ".[test]"
       - name: Run pytest
         run: python -m pytest -q
 
-  build:
-    # 等所有平台的测试全部通过后才开始任意构建。
-    needs: [validate-tag, test]
-    if: needs.validate-tag.outputs.valid == 'true'
-    name: Build ${{ matrix.target }}
-    runs-on: ${{ matrix.runner }}
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - target: windows-x64
-            runner: windows-2025
-            python_arch: x64
-          - target: windows-arm64
-            runner: windows-11-arm
-            python_arch: arm64
-          - target: linux-x64
-            runner: ubuntu-22.04
-            python_arch: x64
-          - target: linux-arm64
-            runner: ubuntu-22.04-arm
-            python_arch: arm64
-          - target: macos-x64
-            runner: macos-15-intel
-            python_arch: x64
-          - target: macos-arm64
-            runner: macos-15
-            python_arch: arm64
-    steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-python@v7
-        with:
-          python-version: '3.12'
-          architecture: ${{ matrix.python_arch }}
-      - name: Verify Python architecture
-        run: python .github/scripts/verify_arch.py ${{ matrix.target }}
-      - name: Install project and build tool
-        run: python -m pip install . pyinstaller==6.22.3
-      - name: Build executable (Linux)
-        if: runner.os == 'Linux'
-        run: python -m PyInstaller --noconfirm --onefile --strip --name EhentaiAutoSignIn --hidden-import urllib3.contrib.socks --hidden-import socks main.py
-      - name: Check Linux debug sections
-        if: runner.os == 'Linux'
-        run: python .github/scripts/check_linux_symbols.py dist/EhentaiAutoSignIn
-      - name: Build executable (Windows / macOS)
-        if: runner.os != 'Linux'
-        run: python -m PyInstaller --noconfirm --onefile --name EhentaiAutoSignIn --hidden-import urllib3.contrib.socks --hidden-import socks main.py
-      - name: Check and package executable
-        run: python .github/scripts/package_release.py ${{ matrix.target }}
-      - name: Verify extraction as root in a temporary directory
-        if: runner.os == 'Linux'
-        shell: bash
-        run: sudo "$(command -v python)" .github/scripts/package_release.py --verify "release/EhentaiAutoSignIn-${{ matrix.target }}.zip" "${{ matrix.target }}"
-      - uses: actions/upload-artifact@v7
-        with:
-          name: build-${{ matrix.target }}
-          path: release/*.zip
-          if-no-files-found: error
-
-  release:
-    needs: [validate-tag, build]
-    if: needs.validate-tag.outputs.valid == 'true'
-    runs-on: ubuntu-latest
-    permissions:
-      contents: write
-    steps:
-      - uses: actions/download-artifact@v8
-        with:
-          path: release
-          pattern: build-*
-          merge-multiple: true
-      - uses: softprops/action-gh-release@v3
-        with:
-          files: release/*.zip
-          fail_on_unmatched_files: true
-          generate_release_notes: true
-
-  docker-test:
-    needs: [validate-tag, test]
-    if: needs.validate-tag.outputs.valid == 'true'
-    name: Test container ${{ matrix.arch }}
-    runs-on: ${{ matrix.runner }}
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - arch: amd64
-            machine: x86_64
-            runner: ubuntu-24.04
-          - arch: arm64
-            machine: aarch64
-            runner: ubuntu-24.04-arm
-    steps:
-      - uses: actions/checkout@v7
-      - name: Build container on native architecture
-        run: docker build -t ehentai-container-test .
-      - name: Test container startup and persistence
-        run: bash .github/scripts/test_container.sh ehentai-container-test ${{ matrix.machine }}
-
-  docker-publish:
-    needs: [validate-tag, docker-test]
-    if: needs.validate-tag.outputs.valid == 'true'
+  publish:
+    needs: test
     runs-on: ubuntu-latest
     permissions:
       contents: read
       packages: write
     steps:
       - uses: actions/checkout@v7
-      - name: Prepare image name
-        id: image
-        shell: bash
-        env:
-          REPOSITORY: ${{ github.repository }}
-        run: echo "name=ghcr.io/${REPOSITORY,,}" >> "$GITHUB_OUTPUT"
       - uses: docker/setup-qemu-action@v4
       - uses: docker/setup-buildx-action@v4
       - uses: docker/login-action@v4
@@ -193,22 +43,32 @@ jobs:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Prepare image tags
+        id: image
+        shell: bash
+        env:
+          REPOSITORY: ${{ github.repository }}
+        run: |
+          name="ghcr.io/${REPOSITORY,,}"
+          if [[ "$GITHUB_REF" == refs/tags/* ]]; then
+            echo "tags=${name}:${GITHUB_REF_NAME},${name}:latest" >> "$GITHUB_OUTPUT"
+          else
+            echo "tags=${name}:edge" >> "$GITHUB_OUTPUT"
+          fi
       - name: Build and push multi-platform image
         uses: docker/build-push-action@v7
         with:
           context: .
           push: true
           platforms: linux/amd64,linux/arm64
-          tags: |
-            ${{ steps.image.outputs.name }}:${{ github.ref_name }}
-            ${{ steps.image.outputs.name }}:latest
+          tags: ${{ steps.image.outputs.tags }}
           labels: |
             org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
-      - name: Verify published architectures
+      - name: Verify the published architectures
         shell: bash
         env:
-          IMAGE: ${{ steps.image.outputs.name }}
-          TAG: ${{ github.ref_name }}
+          TAGS: ${{ steps.image.outputs.tags }}
         run: |
-          docker buildx imagetools inspect --raw "$IMAGE:$TAG" > "$RUNNER_TEMP/ehentai-manifest.json"
-          python -c 'import json, sys; data = json.load(open(sys.argv[1])); platforms = {(item.get("platform", {}).get("os"), item.get("platform", {}).get("architecture")) for item in data["manifests"]}; required = {("linux", "amd64"), ("linux", "arm64")}; assert required <= platforms, f"Missing architectures: {required - platforms}"; print("Published platforms verified:", sorted(required))' "$RUNNER_TEMP/ehentai-manifest.json"
+          first="${TAGS%%,*}"
+          docker buildx imagetools inspect --raw "$first" > "$RUNNER_TEMP/manifest.json"
+          python -c 'import json, sys; data = json.load(open(sys.argv[1], encoding="utf-8")); platforms = {(i.get("platform", {}).get("os"), i.get("platform", {}).get("architecture")) for i in data["manifests"]}; required = {("linux", "amd64"), ("linux", "arm64")}; assert required <= platforms, f"Missing architectures: {sorted(required - platforms)}"; print("Published platforms verified:", sorted(required))' "$RUNNER_TEMP/manifest.json"
