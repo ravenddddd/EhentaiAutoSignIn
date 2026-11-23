@@ -1,0 +1,87 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>E-Hentai Check-in</title>
+<link rel="stylesheet" href="/style.css">
+</head>
+<body>
+
+<main id="login" class="login hidden">
+  <form id="login-form" class="card">
+    <h1>E-Hentai Check-in</h1>
+    <p class="muted">Sign in to view the history and edit the cookie.</p>
+    <label for="password">Password</label>
+    <input id="password" type="password" autocomplete="current-password" required>
+    <button type="submit">Sign in</button>
+    <p id="login-error" class="error" role="alert"></p>
+  </form>
+</main>
+
+<main id="app" class="hidden">
+  <header class="topbar">
+    <h1>E-Hentai Check-in <span id="version" class="muted small"></span></h1>
+    <button id="logout" class="link" type="button">Sign out</button>
+  </header>
+
+  <section class="stats">
+    <article class="card stat">
+      <h2>GP</h2>
+      <p id="gp" class="value">—</p>
+      <p id="gp-source" class="muted small"></p>
+    </article>
+    <article class="card stat">
+      <h2>Credits</h2>
+      <p id="credits" class="value">—</p>
+      <p id="credits-source" class="muted small"></p>
+    </article>
+    <article class="card stat">
+      <h2>Hath</h2>
+      <p id="hath" class="value">—</p>
+      <p id="hath-source" class="muted small"></p>
+    </article>
+  </section>
+
+  <section class="card status">
+    <div class="row"><span class="label">Next run</span><span id="next-run">—</span></div>
+    <div class="row"><span class="label">Schedule</span><span id="schedule">—</span></div>
+    <div class="row"><span class="label">Last result</span><span id="last-result">—</span></div>
+    <div class="row"><span class="label">Balance updated</span><span id="balance-at">—</span></div>
+    <div class="row"><span class="label">Proxy</span><span id="proxy">—</span></div>
+    <div class="row">
+      <button id="run" type="button">Check in now</button>
+      <span id="run-message" class="muted small"></span>
+    </div>
+  </section>
+
+  <section class="card">
+    <h2>Cookie</h2>
+    <p id="cookie-masked" class="mono small">Not configured</p>
+    <ul id="cookie-expiry" class="muted small"></ul>
+    <label for="cookie-input">Paste a new cookie</label>
+    <textarea id="cookie-input" rows="3" spellcheck="false"
+      placeholder="ipb_member_id=...; ipb_pass_hash=...; sk=...; event=111"></textarea>
+    <button id="cookie-save" type="button">Save cookie</button>
+    <p id="cookie-message" class="small"></p>
+  </section>
+
+  <section class="card">
+    <h2>History</h2>
+    <table>
+      <thead>
+        <tr><th>Time</th><th>Trigger</th><th>Result</th><th>GP</th><th>Credits</th><th>Message</th></tr>
+      </thead>
+      <tbody id="history"></tbody>
+    </table>
+  </section>
+
+  <details id="debug" class="card hidden">
+    <summary>Balance debug</summary>
+    <pre id="debug-text" class="mono small"></pre>
+  </details>
+</main>
+
+<script src="/app.js"></script>
+</body>
+</html>

@@ -1,7 +1,7 @@
 [project]
 name = "ehentaiautosignin"
-version = "0.1.0"
-description = "Auto Sign In for E-Hentai"
+version = "1.0.0"
+description = "E-Hentai auto check-in with a local Web UI"
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
@@ -22,9 +22,5 @@ build-backend = "setuptools.build_meta"
 
 [tool.setuptools]
 packages = ["ehentai"]
-py-modules = ["main", "notify"]
-
-[dependency-groups]
-dev = [
-    "pyinstaller==6.22.3",
-]
+package-data = { ehentai = ["static/*"] }
+py-modules = ["main"]

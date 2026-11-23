@@ -1,6 +1,5 @@
-"""访问 E-Hentai 新闻页，处理签到结果、Cookie 和通知。"""
+"""Visit the E-Hentai news page, handle the check-in result and the Cookie."""
 import http.cookies
-import json
 import logging
 import os
 import re
@@ -9,8 +8,8 @@ import time
 import requests
 from bs4 import BeautifulSoup
 
-import notify
-from .config import read_env, save_cookie
+from .config import save_cookie, setting
+
 
 URL = 'https://e-hentai.org/news.php'
 headers = {
@@ -27,24 +26,15 @@ headers = {
     'Cookie': '',
 }
 proxies = {}
-notification_config = {}
-NOTIFY_KEYS = frozenset(notify.push_config)
 COOKIE_FIELDS = ('ipb_member_id', 'ipb_pass_hash', 'sk', 'hath_perks', 'nw', 'event')
 
 
-def send_notify(title, content):
-    """通知失败只记录错误，不中断签到。"""
-    if not notification_config:
-        return
-    try:
-        notify.send(f'Ehentai SignIn - {title}', content,
-                    ignore_default_config=True, **notification_config)
-    except Exception as e:
-        logging.error(f'发送通知失败：{e}')
+class NotConfigured(ValueError):
+    """Raised when no E-Hentai cookie has been configured yet."""
 
 
 def mask_cookie(cookie):
-    """隐藏日志中的 Cookie 值。"""
+    """Hide cookie values in logs and on the Web page."""
     result = []
 
     for item in cookie.split(';'):
@@ -66,59 +56,27 @@ def mask_cookie(cookie):
     return '; '.join(result)
 
 
-
-def parse_notify_config(raw_notify):
-    """解析 Notify JSON，并校验字段是否来自通知模块。"""
-    if not raw_notify:
-        return {}
-    try:
-        config = json.loads(raw_notify)
-    except json.JSONDecodeError as exc:
-        raise ValueError('Notify 必须是有效的 JSON 对象。') from exc
-    if not isinstance(config, dict):
-        raise ValueError('Notify 必须是 JSON 对象。')
-    unknown = set(config) - NOTIFY_KEYS
-    if unknown:
-        raise ValueError(f'Notify 包含未知字段: {", ".join(sorted(unknown))}')
-    if any(not isinstance(value, (str, int, float, bool)) for value in config.values()):
-        raise ValueError('Notify 字段的值必须是字符串、数字或布尔值。')
-    if not config:
-        return {}
-    config = {'HITOKOTO': 'false', **config}
-    if isinstance(config['HITOKOTO'], bool):
-        config['HITOKOTO'] = str(config['HITOKOTO']).lower()
-    return config
-
-
 def init_config():
-    """每次签到前重新读取配置，供请求和通知使用。"""
-    global notification_config
-    # .env 优先，确保上次持久化的 Cookie 在下次运行时生效。
-    values = {key: os.getenv(key, '') for key in ('E_PROXY', 'E_COOKIE', 'E_USER_AGENT', 'Notify')}
-    values.update(read_env())
-    proxy = values.get('E_PROXY', '')
-    cookie = values.get('E_COOKIE', '')
-    user_agent = values.get('E_USER_AGENT', '')
-    raw_notify = values.get('Notify', '')
+    """Reload the request settings before every run."""
+    proxy = setting('E_PROXY')
+    cookie = setting('E_COOKIE')
+    user_agent = setting('E_USER_AGENT')
 
     if not cookie:
-        raise ValueError('请在 .env 或环境变量中设置 E_COOKIE。')
+        raise NotConfigured('No cookie configured. Set E_COOKIE in .env or through the Web UI.')
     proxies.clear()
     if proxy:
         proxies.update(http=proxy, https=proxy)
-        logging.info('已配置代理。')
+        logging.info('Proxy configured.')
     headers['Cookie'] = cookie
-    logging.info(f'使用 Cookie: {mask_cookie(cookie)}')
+    logging.info('Using cookie: %s', mask_cookie(cookie))
     if user_agent:
         headers['User-Agent'] = user_agent
-
-    notification_config = {}
-    notification_config = parse_notify_config(raw_notify)
     os.environ['E_COOKIE'] = cookie
 
 
 def parse_set_cookie(raw_headers):
-    """提取响应中的 Cookie 值与到期时间。"""
+    """Extract cookie values and expiry dates from the response headers."""
     cookies = {}
     expires = []
 
@@ -136,7 +94,7 @@ def parse_set_cookie(raw_headers):
 
 
 def update_cookie(new_cookies, expires):
-    """合并受支持的 Cookie 字段，并在变化时写回 .env。"""
+    """Merge the supported Cookie fields and persist them when they change."""
     old_cookie = os.getenv('E_COOKIE', '')
     current = {}
 
@@ -153,7 +111,7 @@ def update_cookie(new_cookies, expires):
             updated = True
 
     if not updated:
-        logging.info('本地 Cookie 是最新的，无需更新。')
+        logging.info('Local cookie is up to date.')
         return
 
     new_cookie = '; '.join(f'{k}={v}' for k, v in current.items())
@@ -161,16 +119,7 @@ def update_cookie(new_cookies, expires):
     os.environ['E_COOKIE'] = new_cookie
     headers['Cookie'] = new_cookie
 
-    logging.info(f'已更新 .env 中的 E_COOKIE：{mask_cookie(new_cookie)}')
-
-    lines = [
-        f'{key} 过期时间: {value}'
-        for key, value in expires
-        if key in current and key != 'event'
-    ]
-
-    if lines:
-        send_notify('Cookie 更新提醒', '\n'.join(lines))
+    logging.info('Updated E_COOKIE in .env: %s', mask_cookie(new_cookie))
 
 
 def do_request(session=None):
@@ -188,10 +137,10 @@ def do_request(session=None):
 
 
 def request_page():
-    """使用默认 TLS 设置请求，失败后最多重试两次。"""
+    """Request the page with the default TLS settings, retrying up to twice."""
     last_error = None
     for attempt in range(1, 4):
-        logging.info(f'请求页面，第 {attempt}/3 次')
+        logging.info('Fetching page, attempt %s/3', attempt)
         try:
             return do_request()
         except requests.exceptions.RequestException as exc:
@@ -202,65 +151,61 @@ def request_page():
 
 
 def scrape():
-    """执行一次签到并发送结果通知。"""
+    """Perform one check-in and return the parsed outcome."""
     init_config()
 
-    try:
-        response = request_page()
+    response = request_page()
 
-        set_cookies = response.raw.headers.getlist('Set-Cookie')
+    set_cookies = response.raw.headers.getlist('Set-Cookie')
+    expires = []
+    if set_cookies:
+        new_cookies, expires = parse_set_cookie(set_cookies)
+        update_cookie(new_cookies, expires)
+    else:
+        logging.info('No Set-Cookie header; the current cookie is still valid.')
 
-        if set_cookies:
-            new_cookies, expires = parse_set_cookie(set_cookies)
-            update_cookie(new_cookies, expires)
-        else:
-            logging.info('未检测到 Set-Cookie，说明当前 Cookie 有效，无需更新。')
+    # news.php's eventpane holds the reward or a Random Encounter.
+    soup = BeautifulSoup(response.text, 'html.parser')
+    event_pane = soup.find('div', id='eventpane')
 
-        # news.php 的 eventpane 包含奖励或 Random Encounter。
-        soup = BeautifulSoup(response.text, 'html.parser')
-        event_pane = soup.find('div', id='eventpane')
+    if not event_pane:
+        return {
+            'result': 'already',
+            'message': 'Already signed in for today.',
+            'lines': [],
+            'expires': expires,
+        }
 
-        if not event_pane:
-            msg = '没有事件，已经签到了！'
-            logging.info(msg)
-            send_notify('签到结果', msg)
-            return msg
+    event_text = event_pane.get_text(
+        separator=' ',
+        strip=True
+    ).lower()
 
-        event_text = event_pane.get_text(
-            separator=' ',
-            strip=True
-        ).lower()
+    if 'encounter' in event_text:
+        return {
+            'result': 'encounter',
+            'message': 'Random Encounter. Handle it manually or wait for the event to end.',
+            'lines': [],
+            'expires': expires,
+        }
 
-        if 'encounter' in event_text:
-            msg = (
-                '出现 Random Encounter！'
-                '请手动前往处理，或者等待这一随机事件结束！'
-            )
+    # Inline tags may split text and numbers; no extra space before punctuation.
+    lines = [
+        re.sub(r'\s+([,.;:!?])', r'\1', p.get_text(' ', strip=True))
+        for p in event_pane.find_all('p')
+    ]
 
-            logging.info('出现 Random Encounter！')
-            send_notify('签到结果', msg)
-            return 'Random Encounter'
+    if lines:
+        return {
+            'result': 'success',
+            'message': 'Signed in.\n' + '\n'.join(lines),
+            'lines': lines,
+            'expires': expires,
+        }
 
-        # 内联标签可能把文字和数字拆成多个节点；标点前不应多出空格。
-        text_lines = [
-            re.sub(r'\s+([,.;:!?])', r'\1', p.get_text(' ', strip=True))
-            for p in event_pane.find_all('p')
-        ]
-
-        if text_lines:
-            result = '签到成功！\n' + '\n'.join(text_lines)
-            logging.info(result)
-            send_notify('签到结果', result)
-            return text_lines
-
-    except requests.exceptions.RequestException as e:
-        msg = f'请求最终失败: {e}'
-        logging.error(msg)
-        send_notify('请求错误', msg)
-        raise
-
-    except Exception as e:
-        msg = f'程序错误: {e}'
-        logging.error(msg)
-        send_notify('程序错误', msg)
-        raise
+    return {
+        'result': 'unknown',
+        'message': 'Unrecognized check-in response.',
+        'lines': [],
+        'expires': expires,
+    }

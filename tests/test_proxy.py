@@ -14,9 +14,9 @@ from ehentai import signin
     'socks5://127.0.0.1:1080', 'socks5h://127.0.0.1:1080',
 ])
 def test_proxy_configuration_reaches_request(proxy, monkeypatch):
-    monkeypatch.setattr(signin, 'read_env', lambda: {
-        'E_COOKIE': 'id=value', 'E_PROXY': proxy, 'Notify': '',
-    })
+    monkeypatch.setattr(signin, 'setting', lambda name, default='': {
+        'E_COOKIE': 'id=value', 'E_PROXY': proxy,
+    }.get(name, default))
     get = Mock()
     monkeypatch.setattr(signin.requests, 'get', get)
     signin.init_config()

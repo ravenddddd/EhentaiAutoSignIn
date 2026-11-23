@@ -1,4 +1,4 @@
-"""配置控制台日志和可选的本地轮转日志。"""
+"""Configure console logging and optional local rotating logs."""
 from datetime import datetime, time as datetime_time, timedelta
 import logging
 from logging.handlers import RotatingFileHandler
@@ -13,7 +13,7 @@ LOG_FORMAT = '%(asctime)s - %(levelname)s - %(message)s'
 
 
 class RetainedRotatingFileHandler(RotatingFileHandler):
-    """按大小和时间轮转，并删除过期的本程序日志备份。"""
+    """Rotate by size and date, and delete this program's expired backups."""
 
     def __init__(self, filename, max_bytes, retention_days):
         super().__init__(filename, maxBytes=max_bytes, backupCount=30, encoding='utf-8')
@@ -31,7 +31,7 @@ class RetainedRotatingFileHandler(RotatingFileHandler):
         return datetime.combine(tomorrow, datetime_time.min).timestamp()
 
     def cleanup_expired(self):
-        """只清理本程序生成且已过期的轮转文件。"""
+        """Delete only this program's expired rotated files."""
         cutoff = time.time() - self.retention_seconds
         base = Path(self.baseFilename)
         for index in range(1, self.backupCount + 1):
@@ -44,7 +44,7 @@ class RetainedRotatingFileHandler(RotatingFileHandler):
         self.next_cleanup = time.time() + 3600
 
     def shouldRollover(self, record):
-        # 首次跨日写入时轮转；其余情况按文件大小判断。
+        # Rotate on the first write after midnight; otherwise use file size.
         if time.time() >= self.next_rollover and os.path.exists(self.baseFilename):
             if os.path.getsize(self.baseFilename) > 0:
                 return True
@@ -65,11 +65,11 @@ class RetainedRotatingFileHandler(RotatingFileHandler):
 
 
 def configure_file_logging():
-    """按 .env 配置启用文件日志；默认只输出到控制台。"""
+    """Enable file logging from .env; by default only the console is used."""
     keys = ('LOG_ENABLED', 'LOG_DIR', 'LOG_MAX_MB', 'LOG_RETENTION_DAYS')
     values = {key: os.getenv(key, '') for key in keys}
     errors = []
-    # 只解析日志字段，使其他配置行出错时仍能记录启动错误。
+    # Parse only the logging keys so a bad setting elsewhere still gets logged.
     for key in keys:
         try:
             values.update(read_env(keys={key}))
@@ -82,12 +82,12 @@ def configure_file_logging():
             raise errors[0]
         return
     if enabled not in ('true', '1', 'yes', 'on'):
-        raise ValueError('LOG_ENABLED 必须为 true 或 false。')
+        raise ValueError('LOG_ENABLED must be true or false.')
 
     def positive_integer(key, default):
         value = values[key].strip() or str(default)
         if not re.fullmatch(r'[0-9]+', value) or int(value) <= 0:
-            errors.append(ValueError(f'{key} 必须是正整数。'))
+            errors.append(ValueError(f'{key} must be a positive integer.'))
             return default
         return int(value)
 
@@ -101,7 +101,7 @@ def configure_file_logging():
         directory.mkdir(parents=True, exist_ok=True)
         handler = RetainedRotatingFileHandler(directory / 'ehentai.log', max_mb * 1024 * 1024, retention_days)
     except (OSError, ValueError) as exc:
-        # 配置目录不可用时，尽量在默认位置记录启动错误。
+        # When the configured directory is unusable, log to the default one.
         errors.append(exc)
         directory = default_directory
         directory.mkdir(parents=True, exist_ok=True)
@@ -109,6 +109,6 @@ def configure_file_logging():
     handler.setLevel(logging.INFO)
     handler.setFormatter(logging.Formatter(LOG_FORMAT))
     logging.getLogger().addHandler(handler)
-    logging.info('本地文件日志已启用：%s', directory / 'ehentai.log')
+    logging.info('File logging enabled: %s', directory / 'ehentai.log')
     if errors:
         raise errors[0]

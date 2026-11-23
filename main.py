@@ -1,54 +1,72 @@
-"""命令行入口：配置日志，执行一次签到或启动定时任务。"""
+"""Command line entry point: run one check-in or start the Web UI and scheduler."""
 import argparse
 import logging
+import threading
 import time
 
 import schedule
 
+from ehentai import config, runner, web
 from ehentai.config import scheduled_times
 from ehentai.log_setup import LOG_FORMAT, configure_file_logging
-from ehentai.signin import init_config, scrape
 
 logging.basicConfig(level=logging.INFO, format=LOG_FORMAT)
 
 
 class ArgumentParser(argparse.ArgumentParser):
     def error(self, message):
-        """将参数错误交给统一的日志和退出处理。"""
+        """Route argument errors through the shared logging and exit handling."""
         raise ValueError(message)
 
 
-def run_scheduler():
-    """启动时签到一次，再按配置的时间运行。"""
+def run_once(trigger='startup'):
+    """Run one check-in and return True when it succeeded or was already done."""
+    record = runner.run_once(trigger)
+    return record is not None and record['result'] not in ('error', 'unconfigured')
+
+
+def run_service():
+    """Start the Web UI, then run a check-in now and at every scheduled time."""
     times = scheduled_times()
-    init_config()  # 启动时检查配置；每次签到时也会重新读取。
-    logging.info('定时签到已启动（系统本地时间）：%s', ', '.join(times))
-    logging.info('启动后立即执行一次签到。')
-    scrape()
+    password = config.setting('WEB_PASSWORD')
+    if not password:
+        raise ValueError('WEB_PASSWORD is required to start the Web UI.')
+    port = config.web_port()
+
+    server = web.serve(port, password)
+    logging.info('Web UI listening on port %s', port)
+
     scheduler = schedule.Scheduler()
     for scheduled_time in times:
-        scheduler.every().day.at(scheduled_time).do(scrape)
-    logging.info('下次签到时间：%s', scheduler.next_run)
-    while True:
-        scheduler.run_pending()
-        time.sleep(1)
+        scheduler.every().day.at(scheduled_time).do(runner.run_once, 'scheduled')
+
+    logging.info('Scheduled check-ins (local time): %s', ', '.join(times))
+    logging.info('Next run: %s', scheduler.next_run)
+    logging.info('Running a check-in now.')
+    threading.Thread(target=run_once, args=('startup',), name='startup-run', daemon=True).start()
+
+    try:
+        while True:
+            scheduler.run_pending()
+            time.sleep(1)
+    finally:
+        server.shutdown()
 
 
 def main():
-    parser = ArgumentParser(description='E-Hentai 自动签到')
-    parser.add_argument('--once', action='store_true', help='立即执行一次签到后退出')
+    parser = ArgumentParser(description='E-Hentai auto check-in')
+    parser.add_argument('--once', action='store_true', help='run one check-in and exit')
     try:
         configure_file_logging()
         args = parser.parse_args()
         if args.once:
-            scrape()
-        else:
-            run_scheduler()
+            return 0 if run_once('cli') else 1
+        run_service()
     except KeyboardInterrupt:
-        logging.info('程序已停止。')
+        logging.info('Stopped.')
         return 0
     except Exception as exc:
-        logging.error('程序运行失败：%s: %s', type(exc).__name__, exc)
+        logging.error('Startup failed: %s: %s', type(exc).__name__, exc)
         return 1
     return 0
 

@@ -1,1 +1,3 @@
-"""E-Hentai 单机签到所需的配置、日志和签到模块。"""
+"""Configuration, Web UI and check-in support for E-Hentai."""
+
+__version__ = '1.0.0'
